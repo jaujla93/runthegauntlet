@@ -141,6 +141,38 @@ tr:last-child td{border-bottom:0}
 .opt.wrong{background:#7d3f22;border-color:#a4552d}
 .rules-strip{font-family:var(--mono);font-size:10px;color:var(--fog);line-height:1.8;margin-top:16px}
 
+.routegrid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;width:100%;margin-top:6px}
+.rbtn{padding:14px 4px;border:1px solid var(--hair-strong);border-radius:2px;background:rgba(0,0,0,.2);
+  font-family:var(--display);font-weight:700;font-size:15px;letter-spacing:.03em;text-transform:uppercase;transition:background .1s}
+.rbtn:hover{background:rgba(246,238,226,.07)}
+.rbtn.right{background:var(--go);border-color:#4f8757}
+.rbtn.wrong{background:#7d3f22;border-color:#a4552d}
+
+.pocket{position:relative;width:100%;height:270px;border:1px dashed var(--hair);border-radius:2px;overflow:hidden;
+  touch-action:none;background-image:repeating-linear-gradient(90deg,rgba(246,238,226,.06) 0 1px,transparent 1px 30px)}
+.qbdot{position:absolute;width:20px;height:20px;border-radius:50%;background:var(--chalk);
+  box-shadow:0 0 0 4px rgba(246,238,226,.16);will-change:transform;pointer-events:none}
+.rusher{position:absolute;width:17px;height:17px;border-radius:3px;background:var(--suede);
+  box-shadow:0 0 0 3px rgba(141,88,38,.2);will-change:transform;pointer-events:none}
+
+.sides{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%;margin-top:22px}
+.side{padding:26px 8px;border:1px solid var(--hair-strong);border-radius:2px;background:rgba(0,0,0,.2);
+  font-family:var(--display);font-weight:800;font-size:32px;transition:background .1s}
+.side:hover{background:rgba(246,238,226,.07)}
+.side.right{background:var(--go);border-color:#4f8757}
+.side.wrong{background:#7d3f22;border-color:#a4552d}
+.wordstage{position:relative;width:100%;height:120px;display:flex;align-items:center}
+.wordstage b{position:absolute;font-family:var(--display);font-weight:800;font-size:clamp(34px,10vw,54px);
+  letter-spacing:.02em;text-transform:uppercase;width:44%;text-align:center}
+
+.pickrow{display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start;padding:9px 0;
+  border-bottom:1px dashed var(--hair);cursor:pointer;margin:0}
+.pickrow:last-child{border-bottom:0}
+.pickrow input{width:17px;height:17px;accent-color:var(--suede);margin-top:3px;padding:0}
+.pickrow .t{font-family:var(--display);font-weight:600;font-size:18px;text-transform:uppercase;line-height:1.05;display:block}
+.pickrow .d{font-size:12.5px;color:var(--fog);display:block;margin-top:2px}
+.pickrow.on .t{color:var(--suede)}
+
 .pickcard{display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:14px;border:1px solid var(--hair);
   border-radius:2px;padding:14px 16px;margin-bottom:9px;background:rgba(246,238,226,.035);opacity:0;transform:translateY(14px)}
 .pickcard.in{animation:drop .5s cubic-bezier(.2,.9,.3,1) forwards}
@@ -201,12 +233,23 @@ tr:last-child td{border-bottom:0}
 
 const A = document.getElementById('app');
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 chars, no O/0/I/1
-const GAMES = [
-  {t:'Snap Count',        d:'Read the cadence. Move on the snap, not before.'},
-  {t:'Playbook Recall',   d:'Watch the route sequence. Play it back in order.'},
-  {t:'Precision Passing', d:'Lead the receiver. Release early or you throw behind him.'},
-  {t:'Two-Minute Drill',  d:'Score the stat line. Wrong answers burn clock.'}
+/* Eight stations; each league runs four. The chosen four are recorded in the
+   league and travel inside every link, so everyone runs the same set — the
+   scores would mean nothing otherwise. Order here is permanent: the indices
+   are what get stored, so new stations append and existing ones never move. */
+const POOL = [
+  {t:'Snap Count',        d:'Read the cadence. Move on the snap, not before.',        fn:()=>gameSnapCount()},
+  {t:'Playbook Recall',   d:'Watch the route sequence. Play it back in order.',       fn:()=>gameRecall()},
+  {t:'Precision Passing', d:'Lead the receiver. Release early or you throw behind him.', fn:()=>gamePassing()},
+  {t:'Two-Minute Drill',  d:'Score the stat line. Wrong answers burn clock.',         fn:()=>gameDrill()},
+  {t:'Route Tree',        d:'Find the called route on a board that keeps reshuffling.', fn:()=>gameRouteTree()},
+  {t:'Pocket Presence',   d:'Slide away from the rush. Stay upright as long as you can.', fn:()=>gamePocket()},
+  {t:'Audible',           d:'Ignore what the word says. Answer where it sits.',       fn:()=>gameAudible()},
+  {t:'Clock Management',  d:'Stop the clock on the number. It hides while it runs.',  fn:()=>gameClock()}
 ];
+const DEFAULT_G = [0,1,2,3];
+const stations = g => (Array.isArray(g) && g.length===4 && g.every(i=>POOL[i]) ? g : DEFAULT_G).map(i=>POOL[i]);
+let CUR = stations(null);   // the four in play for whoever is on screen
 const MAXRT = 8184; // ms ceiling encodable in the result code
 
 /* ---------------- tiny helpers ---------------- */
@@ -267,6 +310,29 @@ const strayChars = s => {
   return typed.length - cleanCode(typed).length;
 };
 
+/* The slot lives in the top 4 bits of the body, readable without the key.
+   Used to file pasted codes against the right manager before verifying. */
+function slotOf(raw){
+  const s = cleanCode(raw); if(s.length !== 16) return null;
+  const x = fromB32(s); if(x === null) return null;
+  return Number(((x >> 25n) >> 48n) & 15n);
+}
+/* Returns CANDIDATES, not verified codes — the caller checks each signature.
+   A regex can't tell "Dave AVEN-TUGJ-RWAQ-4HPN" from a code, because a
+   four-letter name looks exactly like a code group. So offer every plausible
+   window and let the MAC decide; a wrong window cannot survive it. */
+function harvestCodes(text){
+  const toks = (text||'').toUpperCase().split(/[^A-Z0-9]+/)
+                 .map(cleanCode).filter(Boolean);
+  const out = [];
+  for(const tk of toks) if(tk.length === 16) out.push(tk);          // pasted whole
+  for(let i=0; i+3 < toks.length; i++){                             // four groups
+    if(toks[i].length===4 && toks[i+1].length===4 && toks[i+2].length===4 && toks[i+3].length===4)
+      out.push(toks[i]+toks[i+1]+toks[i+2]+toks[i+3]);
+  }
+  return Array.from(new Set(out));
+}
+
 async function readResultCode(master, raw, roster){
   const s = cleanCode(raw), stray = strayChars(raw);
   if(s.length !== 16){
@@ -291,8 +357,8 @@ async function readResultCode(master, raw, roster){
 function b64u(obj){ return btoa(unescape(encodeURIComponent(JSON.stringify(obj)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function unb64u(s){ try{ return JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g,'+').replace(/_/g,'/'))))); }catch(e){ return null; } }
 const baseURL = () => location.href.split('#')[0];
-const playerLink  = (L,i) => baseURL()+'#p='+b64u({v:1,n:L.name,c:L.code,i,m:L.managers[i],t:L.managers.length,k:L.slotKeys[i]});
-const commishLink = L    => baseURL()+'#c='+b64u({v:1,n:L.name,c:L.code,m:L.managers,k:L.master});
+const playerLink  = (L,i) => baseURL()+'#p='+b64u({v:1,n:L.name,c:L.code,i,m:L.managers[i],t:L.managers.length,k:L.slotKeys[i],g:L.games||DEFAULT_G});
+const commishLink = L    => baseURL()+'#c='+b64u({v:1,n:L.name,c:L.code,m:L.managers,k:L.master,g:L.games||DEFAULT_G});
 
 /* ---------------- render + screen token ---------------- */
 let TOKEN = 0;
@@ -334,8 +400,9 @@ function screenHome(){
     <p class="lede mt">Four stations. One run each. Highest score picks first.</p>
     <p class="small mt">No random lottery, no commissioner's thumb on the scale. Every manager runs the same four stations, and nobody sees a number until the last person is through.</p>
     <div class="rule"></div>
-    <div class="eyebrow">The stations</div>
-    <div class="mt">${GAMES.map((g,i)=>`<div class="station"><div class="n">0${i+1}</div>
+    <div class="eyebrow">Eight stations · four per league</div>
+    <p class="small mt">The commissioner picks four, or lets the app draw them. Different every season if you want it that way.</p>
+    <div class="mt">${POOL.map(g=>`<div class="station"><div class="n">—</div>
       <div><div class="t">${g.t}</div><div class="d">${g.d}</div></div></div>`).join('')}</div>
     <div class="rule"></div>
     <button class="btn" id="create">Set up a league</button>
@@ -376,7 +443,7 @@ function screenResume(){
     const m = v.match(/#c=([A-Za-z0-9\-_]+)/);
     const p = m ? unb64u(m[1]) : null;
     if(!p || !p.m || !p.k) return $('#err').innerHTML = '<div class="err">That is not a commissioner link. It contains "#c=" followed by a long string.</div>';
-    const L = {name:p.n, code:p.c, managers:p.m, master:p.k};
+    const L = {name:p.n, code:p.c, managers:p.m, master:p.k, games:p.g};
     const cached = lsGet('gg.commish.'+L.code);
     screenCommish(L, (cached && cached.codes) || {});
   };
@@ -395,12 +462,35 @@ function screenSetup(){
     <div class="field"><label>League name</label><input id="lname" maxlength="42" placeholder="e.g. Sunday Money"></div>
     <div class="field"><label>Managers — one per line, in any order</label>
       <textarea id="mgrs" rows="9" placeholder="Jesse&#10;Harman&#10;Ryan&#10;Steven"></textarea></div>
-    <button class="btn" id="go">Generate links</button>
+    <div class="rule"></div>
+    <div class="field"><label>Stations — pick exactly four</label>
+      <div id="pool">${POOL.map((g,i)=>`<label class="pickrow" data-row="${i}">
+        <input type="checkbox" data-g="${i}">
+        <span><span class="t">${g.t}</span><span class="d">${g.d}</span></span></label>`).join('')}</div>
+      <div class="row mt"><button class="btn ghost sm" id="shuf">Draw four at random</button>
+        <span class="small mono" id="cnt" style="align-self:center"></span></div>
+    </div>
+    <p class="small">Everyone in a league runs the same four. Change them next season and the gauntlet is new again.</p>
+    <button class="btn mt" id="go">Generate links</button>
     <button class="btn ghost mt" id="back">Back</button>
   `);
   $('#back').onclick = screenHome;
+  const boxes = $$('[data-g]');
+  const chosen = () => boxes.filter(b=>b.checked).map(b=>+b.dataset.g);
+  const refresh = () => {
+    const n = chosen().length;
+    $('#cnt').textContent = n+' of 4 chosen';
+    $('#cnt').style.color = n===4 ? '#7fae7f' : 'var(--fog)';
+    boxes.forEach(b => b.closest('.pickrow').classList.toggle('on', b.checked));
+  };
+  const draw = () => { const r = shuffle([...POOL.keys()]).slice(0,4);
+    boxes.forEach(b => b.checked = r.includes(+b.dataset.g)); refresh(); };
+  boxes.forEach(b => b.onchange = refresh);
+  $('#shuf').onclick = draw;
+  draw();
   $('#go').onclick = async () => {
     const name = $('#lname').value.trim();
+    const games = chosen();
     const managers = $('#mgrs').value.split('\n').map(s=>s.trim().slice(0,28)).filter(Boolean);
     const seen = new Set(); const dup = managers.find(n => seen.size === seen.add(n.toLowerCase()).size);
     const e = m => $('#err').innerHTML = '<div class="err">'+esc(m)+'</div>';
@@ -408,12 +498,13 @@ function screenSetup(){
     if(managers.length < 2) return e('Add at least 2 managers.');
     if(managers.length > 16) return e('16 managers max — that is the ceiling the result code can encode.');
     if(dup) return e('Two managers are both named "'+dup+'". Make the names unique so the board reads clearly.');
+    if(games.length !== 4) return e('Pick exactly four stations — you have '+games.length+'.');
 
     $('#go').disabled = true; $('#go').textContent = 'Signing…';
     const master = randCode(20);
-    const L = {name, code:randCode(6), managers, master, slotKeys:[]};
+    const L = {name, code:randCode(6), managers, master, slotKeys:[], games};
     for(let i=0;i<managers.length;i++) L.slotKeys.push(await slotKey(master, i));
-    lsSet('gg.commish.'+L.code, {L:{name:L.name, code:L.code, managers:L.managers, master:L.master}, codes:{}});
+    lsSet('gg.commish.'+L.code, {L:{name:L.name, code:L.code, managers:L.managers, master:L.master, games:L.games}, codes:{}});
     screenDispatch(L);
   };
 }
@@ -462,7 +553,21 @@ function screenDispatch(L){
    COMMISSIONER SHEET — collect result codes
    ========================================================================== */
 function screenCommish(L, codes){
-  const save = () => lsSet('gg.commish.'+L.code, {L:{name:L.name,code:L.code,managers:L.managers,master:L.master}, codes});
+  CUR = stations(L.games);
+  /* Storage alone was losing the tally — blocked in private browsing, evicted
+     by tracking protection, and simply absent on a second device. The URL is
+     the durable copy now: every code goes into the address bar, so reloading,
+     bookmarking, or sending yourself the link all restore the sheet. Storage
+     stays as a convenience for anyone who arrives without the query. */
+  const syncURL = () => {
+    const r = L.managers.map((_,i)=>codes[i]||'').filter(Boolean).join('');
+    try{ history.replaceState(null, '', commishLink(L) + (r ? '&r='+r : '')); }catch(e){}
+  };
+  const save = () => {
+    lsSet('gg.commish.'+L.code, {L:{name:L.name,code:L.code,managers:L.managers,master:L.master,games:L.games}, codes});
+    syncURL();
+  };
+  syncURL();
   const draw = async () => {
     const parsed = {};
     for(const [slot, raw] of Object.entries(codes)){
@@ -495,7 +600,16 @@ function screenCommish(L, codes){
       <div class="row mt">
         <button class="btn ghost sm" id="links">Manager links</button>
         <button class="btn ghost sm" id="dl">Download backup</button>
+        <button class="btn ghost sm" id="cpurl">Copy sheet link</button>
       </div>
+      <div class="rule"></div>
+      <div class="eyebrow">Paste several at once</div>
+      <p class="small mt">Drop in a run of texts, or your backup file. Anything that looks like a code gets filed against the right manager; everything else is ignored.</p>
+      <div class="field mt"><textarea id="bulk" rows="4" placeholder="Ryan — AVEN-TUGJ-RWAQ-4HPN&#10;Harman: 7K2M-PR4X-Q9BT-3WNC"></textarea></div>
+      <button class="btn ghost sm" id="bulkgo">Read codes from that</button>
+      <div class="small mt" id="bulkmsg"></div>
+      ${!LS_OK?`<div class="note warn">This browser is blocking local storage, so nothing saves here. Your sheet link in the address bar carries every code you enter — <b>bookmark it now</b>, and use Copy sheet link before you close the tab.</div>`
+              :`<div class="note">Your address bar holds the whole sheet, codes included. Bookmark it, or use <b>Copy sheet link</b> to carry on from another device.</div>`}
       <div class="note mt2">Two codes for the same manager can't both count — a code is signed to one slot, and pasting a second replaces the first. If someone sends two, ask why before you take either.</div>
     `);
     $$('[data-add]').forEach(b => b.onclick = async () => {
@@ -518,8 +632,33 @@ function screenCommish(L, codes){
       }
       screenDispatch(L);
     };
+    copyBtn('#cpurl', commishLink(L) + (Object.keys(parsed).length ? '&r='+L.managers.map((_,i)=>codes[i]||'').filter(Boolean).join('') : ''), 'Copied');
+    $('#bulkgo').onclick = async () => {
+      const found = harvestCodes($('#bulk').value);
+      const names = [];
+      let added = 0, dupes = 0;
+      for(const c of found){
+        const r = await readResultCode(L.master, c, L.managers);
+        if(!r.ok) continue;                       // wrong window, or not ours
+        if(codes[r.slot] === c){ dupes++; continue; }
+        codes[r.slot] = c; added++; names.push(r.name);
+      }
+      if(added){
+        $('#bulk').value = '';
+        save(); draw();
+        const m = $('#bulkmsg'); if(m) m.textContent = 'Added '+names.join(', ')+'.';
+        return;
+      }
+      $('#bulkmsg').textContent = dupes
+        ? 'Already had '+dupes+' of those. Nothing new.'
+        : 'No valid codes for this league in that text.';
+    };
     $('#dl').onclick = () => download('gridiron-gauntlet-'+L.code+'-sheet.txt',
-      'GRIDIRON GAUNTLET — '+L.name+'\nCommissioner link:\n'+commishLink(L)+'\n\nCodes received:\n'
+      'GRIDIRON GAUNTLET — '+L.name+'\n\nSTATIONS: '+CUR.map(g=>g.t).join(' · ')
+      +'\n\nSHEET LINK (restores everything, codes included):\n'
+      + commishLink(L) + (L.managers.map((_,i)=>codes[i]||'').filter(Boolean).length
+          ? '&r='+L.managers.map((_,i)=>codes[i]||'').filter(Boolean).join('') : '')
+      +'\n\nCodes received:\n'
       + L.managers.map((m,i)=>m+': '+(codes[i]||'—')).join('\n')+'\n');
     if(all) $('#reveal').onclick = () => screenBoard(L, Object.values(parsed));
   };
@@ -530,6 +669,7 @@ function screenCommish(L, codes){
    PLAYER — arrives via #p= link
    ========================================================================== */
 async function screenPlayerIntro(p){
+  CUR = stations(p.g);
   const lock = lsGet('gg.run.'+p.c);
   if(lock && lock.slot !== p.i){
     return render(`
@@ -556,7 +696,7 @@ async function screenPlayerIntro(p){
     <p class="small mt">Checked in from your personal link. Manager ${p.i+1} of ${p.t}.</p>
     <div class="rule"></div>
     <div class="eyebrow">Four stations, back to back</div>
-    <div class="mt">${GAMES.map((g,i)=>`<div class="station"><div class="n">0${i+1}</div>
+    <div class="mt">${CUR.map((g,i)=>`<div class="station"><div class="n">0${i+1}</div>
       <div><div class="t">${g.t}</div><div class="d">${g.d}</div><div class="small mono" style="margin-top:3px">250 pts</div></div></div>`).join('')}</div>
     <div class="rule"></div>
     <div class="note warn"><b>One run. No restarts.</b> The clock starts when you tap below and does not stop between stations. If you close this or reload, you keep the stations you finished and score zero on the rest.</div>
@@ -583,10 +723,10 @@ async function runGauntlet(p){
      after station one so that closing the tab mid-station-one still spends it. */
   lsSet('gg.run.'+p.c, {slot:p.i, done:false, partial:S.run});
   RUNNING = true;
-  const runners = [gameSnapCount, gameRecall, gamePassing, gameDrill];
+  CUR = stations(p.g);
   for(let i=0;i<4;i++){
     await stationCard(i);
-    const res = await runners[i](i);
+    const res = await CUR[i].fn();
     S.run.scores[i] = res.points;
     S.run.run[i] = true;
     if(res.rt) S.run.rt += res.rt;
@@ -620,7 +760,7 @@ function screenResult(p, code, scores, runFlags, returning){
     <p class="small mt">The code is signed to your slot. Nobody else can produce one for you, and nothing survives being retyped wrong — if the signature doesn't match, your commissioner will know to ask you for it again.</p>
     <div class="rule"></div>
     <div class="eyebrow">Your card</div>
-    <div class="mt">${GAMES.map((g,i)=>`<div class="station"><div class="n">0${i+1}</div>
+    <div class="mt">${CUR.map((g,i)=>`<div class="station"><div class="n">0${i+1}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
         <div class="t">${g.t}</div>
         <div class="mono" style="font-size:11px;letter-spacing:.14em;color:${flags[i]?'#7fae7f':'var(--fog)'}">${flags[i]?'Run':'Not run'}</div>
@@ -641,8 +781,8 @@ function stationCard(i){
       <div class="eyebrow">Station 0${i+1} of 04</div>
       <div class="stage mt" style="min-height:300px">
         <div class="huge" style="color:var(--suede)">0${i+1}</div>
-        <h2 class="mt" style="font-size:34px">${GAMES[i].t}</h2>
-        <p class="lede mt" style="max-width:330px">${GAMES[i].d}</p>
+        <h2 class="mt" style="font-size:34px">${CUR[i].t}</h2>
+        <p class="lede mt" style="max-width:330px">${CUR[i].d}</p>
         <div class="sub" id="cd">Starts in 3</div>
       </div>`);
     let n = 3;
@@ -663,7 +803,7 @@ function interCard(i){
         <div class="cad" style="color:var(--fog)">Logged</div>
         <div class="sub">Score hidden until the league is through</div>
       </div>
-      <p class="small mt" style="text-align:center">Next up — ${GAMES[i+1].t}</p>`);
+      <p class="small mt" style="text-align:center">Next up — ${CUR[i+1].t}</p>`);
     setTimeout(()=>{ if(live(t)) r(); }, 1800);
   });
 }
@@ -991,6 +1131,262 @@ async function gameDrill(){
 }
 
 /* ==========================================================================
+   STATION — ROUTE TREE  (visual search against a clock)
+   ========================================================================== */
+async function gameRouteTree(){
+  const ROUTES=['GO','POST','CORNER','OUT','DIG','FLAT','DRAG','CURL'];
+  const DUR=26000, PEN=1600, PER=15, CAP=250;
+  const t=render(`
+    <div class="hud"><span>Station · <b>Route Tree</b></span><span>Clock <b id="clk">26.0</b></span></div>
+    <div class="clockbar"><i id="bar" style="width:100%"></i></div>
+    <div class="stage" style="min-height:340px;justify-content:flex-start;padding-top:24px">
+      <div class="eyebrow" style="justify-content:center">Route called</div>
+      <div class="cad mt" id="call" style="font-size:clamp(32px,10vw,50px)">—</div>
+      <div class="routegrid" id="grid"></div>
+    </div>
+    <p class="small mt" style="text-align:center">Tap the route that was called. The board reshuffles as you go.</p>`);
+  const grid=$('#grid'), call=$('#call'), clk=$('#clk'), bar=$('#bar');
+  let correct=0, deadline=performance.now()+DUR, over=false, want='', endResolve, since=0;
+  const ended=new Promise(r=>endResolve=r);
+  function end(){ if(over) return; over=true;
+    call.textContent='Clock Zero'; grid.innerHTML=''; setTimeout(endResolve,900); }
+  const tick=()=>{ if(over||!live(t)) return;
+    const left=deadline-performance.now();
+    if(left<=0){ clk.textContent='0.0'; bar.style.width='0%'; end(); return; }
+    clk.textContent=(left/1000).toFixed(1); bar.style.width=clamp(left/DUR*100,0,100)+'%';
+    requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+  function board(){
+    grid.innerHTML=shuffle(ROUTES).map(r=>`<button class="rbtn">${r}</button>`).join('');
+    Array.from(grid.children).forEach(b=>{
+      b.onclick=()=>{
+        if(over) return;
+        Array.from(grid.children).forEach(x=>x.onclick=null);
+        if(b.textContent===want){ b.classList.add('right'); correct++;
+          if(correct*PER>=CAP){ end(); return; }
+          setTimeout(next,180);
+        } else { b.classList.add('wrong'); deadline-=PEN;
+          Array.from(grid.children).forEach(x=>{ if(x.textContent===want) x.classList.add('right'); });
+          setTimeout(next,430); }
+      };
+    });
+  }
+  function next(){
+    if(over||!live(t)) return;
+    want=pick(ROUTES); call.textContent=want;
+    if(since<=0){ board(); since=3; } else { since--;
+      Array.from(grid.children).forEach(b=>{ b.className='rbtn';
+        b.onclick=()=>{ if(over) return;
+          Array.from(grid.children).forEach(x=>x.onclick=null);
+          if(b.textContent===want){ b.classList.add('right'); correct++;
+            if(correct*PER>=CAP){ end(); return; } setTimeout(next,180); }
+          else { b.classList.add('wrong'); deadline-=PEN;
+            Array.from(grid.children).forEach(x=>{ if(x.textContent===want) x.classList.add('right'); });
+            setTimeout(next,430); } }; });
+    }
+  }
+  next();
+  await ended;
+  return {points: clamp(correct*PER,0,CAP)};
+}
+
+/* ==========================================================================
+   STATION — POCKET PRESENCE  (evasion, continuous control)
+   ========================================================================== */
+async function gamePocket(){
+  const DUR=20000;
+  const t=render(`
+    <div class="hud"><span>Station · <b>Pocket Presence</b></span><span>Upright <b id="up">0.0</b>s</span></div>
+    <div class="clockbar"><i id="bar" style="width:0%"></i></div>
+    <div class="stage" style="min-height:340px;padding:16px">
+      <div class="cad" id="cad" style="font-size:20px">Drag to move</div>
+      <div class="pocket mt" id="pk"><div class="qbdot" id="qb"></div></div>
+      <div class="sub" id="sub">Survive twenty seconds</div>
+    </div>
+    <p class="small mt" style="text-align:center">Drag anywhere in the pocket, or use the arrow keys. One hit ends it.</p>`);
+  const pk=$('#pk'), qb=$('#qb'), cad=$('#cad'), sub=$('#sub'), bar=$('#bar'), up=$('#up');
+  const W=pk.clientWidth||320, H=pk.clientHeight||270;
+  let x=W/2, y=H*0.72, rushers=[], t0=performance.now(), last=t0, spawnAt=t0+700, dead=false, resolveG;
+  const done=new Promise(r=>resolveG=r);
+  const QR=10, RR=8.5;
+  const place=()=>{ qb.style.transform='translate('+(x-QR)+'px,'+(y-QR)+'px)'; };
+  place();
+  const setFrom=e=>{ const r=pk.getBoundingClientRect();
+    x=clamp(e.clientX-r.left,QR,W-QR); y=clamp(e.clientY-r.top,QR,H-QR); place(); };
+  const pd=e=>{ e.preventDefault(); setFrom(e); };
+  const pm=e=>{ if(e.buttons||e.pointerType==='touch'){ e.preventDefault(); setFrom(e); } };
+  pk.addEventListener('pointerdown',pd); pk.addEventListener('pointermove',pm);
+  const keys={};
+  const kd=e=>{ if(e.key.startsWith('Arrow')){ e.preventDefault(); keys[e.key]=1; } };
+  const ku=e=>{ keys[e.key]=0; };
+  window.addEventListener('keydown',kd); window.addEventListener('keyup',ku);
+
+  const loop=now=>{
+    if(!live(t)||dead) return;
+    const dt=Math.min((now-last)/1000,0.05); last=now;
+    const el=now-t0;
+    if(keys.ArrowLeft) x-=260*dt; if(keys.ArrowRight) x+=260*dt;
+    if(keys.ArrowUp) y-=260*dt;  if(keys.ArrowDown) y+=260*dt;
+    x=clamp(x,QR,W-QR); y=clamp(y,QR,H-QR); place();
+    if(now>=spawnAt){
+      const gap=Math.max(230, 780-el/26);
+      spawnAt=now+gap;
+      const edge=rnd(0,3);
+      let sx,sy;
+      if(edge===0){ sx=Math.random()*W; sy=-14; } else if(edge===1){ sx=Math.random()*W; sy=H+14; }
+      else if(edge===2){ sx=-14; sy=Math.random()*H; } else { sx=W+14; sy=Math.random()*H; }
+      const dx=x-sx, dy=y-sy, d=Math.hypot(dx,dy)||1;
+      const sp=(105+el/150)*(0.85+Math.random()*0.3);
+      const el2=document.createElement('div'); el2.className='rusher'; pk.appendChild(el2);
+      rushers.push({x:sx,y:sy,vx:dx/d*sp,vy:dy/d*sp,el:el2});
+    }
+    for(let i=rushers.length-1;i>=0;i--){
+      const r=rushers[i];
+      r.x+=r.vx*dt; r.y+=r.vy*dt;
+      r.el.style.transform='translate('+(r.x-RR)+'px,'+(r.y-RR)+'px)';
+      if(r.x<-40||r.x>W+40||r.y<-40||r.y>H+40){ r.el.remove(); rushers.splice(i,1); continue; }
+      if(Math.hypot(r.x-x,r.y-y) < QR+RR-2){ return finish(el); }
+    }
+    up.textContent=(el/1000).toFixed(1); bar.style.width=clamp(el/DUR*100,0,100)+'%';
+    if(el>=DUR) return finish(DUR);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+
+  function finish(el){
+    dead=true;
+    pk.removeEventListener('pointerdown',pd); pk.removeEventListener('pointermove',pm);
+    window.removeEventListener('keydown',kd); window.removeEventListener('keyup',ku);
+    const survived=clamp(el,0,DUR);
+    up.textContent=(survived/1000).toFixed(1);
+    cad.textContent = survived>=DUR ? 'Ball Away' : 'Sacked';
+    sub.textContent = survived>=DUR ? 'Clean pocket the whole way' : (survived/1000).toFixed(1)+' seconds upright';
+    qb.style.background = survived>=DUR ? '#7fae7f' : '#a4552d';
+    setTimeout(()=>resolveG(Math.round(250*survived/DUR)),1000);
+  }
+  const pts=await done;
+  return {points: clamp(pts,0,250)};
+}
+
+/* ==========================================================================
+   STATION — AUDIBLE  (spatial interference; answer position, not meaning)
+   ========================================================================== */
+async function gameAudible(){
+  const DUR=26000, PEN=1600, PER=13, CAP=250;
+  const t=render(`
+    <div class="hud"><span>Station · <b>Audible</b></span><span>Clock <b id="clk">26.0</b></span></div>
+    <div class="clockbar"><i id="bar" style="width:100%"></i></div>
+    <div class="stage" style="min-height:340px;justify-content:flex-start;padding-top:20px">
+      <div class="eyebrow" style="justify-content:center">Which side is the call on?</div>
+      <div class="wordstage" id="ws"><b id="word">—</b></div>
+      <div class="sides">
+        <button class="side" id="L">LEFT</button>
+        <button class="side" id="R">RIGHT</button>
+      </div>
+      <div class="rules-strip">Answer where the word <b>sits</b>, not what it <b>says</b>.</div>
+    </div>
+    <p class="small mt" style="text-align:center">Half of them lie to you. Arrow keys work.</p>`);
+  const word=$('#word'), clk=$('#clk'), bar=$('#bar');
+  const btn={L:$('#L'), R:$('#R')};
+  let correct=0, deadline=performance.now()+DUR, over=false, side='L', endResolve;
+  const ended=new Promise(r=>endResolve=r);
+  function end(){ if(over) return; over=true;
+    window.removeEventListener('keydown',key);
+    word.textContent='Clock Zero'; word.style.left='28%';
+    btn.L.disabled=btn.R.disabled=true; setTimeout(endResolve,900); }
+  const tick=()=>{ if(over||!live(t)) return;
+    const left=deadline-performance.now();
+    if(left<=0){ clk.textContent='0.0'; bar.style.width='0%'; end(); return; }
+    clk.textContent=(left/1000).toFixed(1); bar.style.width=clamp(left/DUR*100,0,100)+'%';
+    requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+  function answer(pickSide){
+    if(over) return;
+    const b=btn[pickSide];
+    if(pickSide===side){ b.classList.add('right'); correct++;
+      setTimeout(()=>{ b.classList.remove('right'); if(correct*PER>=CAP) end(); else next(); },170); }
+    else { b.classList.add('wrong'); deadline-=PEN;
+      btn[side].classList.add('right');
+      setTimeout(()=>{ b.classList.remove('wrong'); btn[side].classList.remove('right'); next(); },430); }
+  }
+  const key=e=>{ if(over) return;
+    if(e.key==='ArrowLeft'){ e.preventDefault(); answer('L'); }
+    if(e.key==='ArrowRight'){ e.preventDefault(); answer('R'); } };
+  window.addEventListener('keydown',key);
+  btn.L.onclick=()=>answer('L'); btn.R.onclick=()=>answer('R');
+  function next(){
+    if(over||!live(t)) return;
+    side = Math.random()<0.5 ? 'L' : 'R';
+    const says = Math.random()<0.5 ? 'LEFT' : 'RIGHT';
+    word.textContent=says;
+    word.style.left = side==='L' ? '3%' : '53%';
+  }
+  next();
+  await ended;
+  return {points: clamp(correct*PER,0,CAP)};
+}
+
+/* ==========================================================================
+   STATION — CLOCK MANAGEMENT  (blind interval estimation)
+   ========================================================================== */
+async function gameClock(){
+  const TARGETS=shuffle([2.6,3.9,5.1,6.3,7.4]);
+  const t=render(`
+    <div class="hud"><span>Station · <b>Clock Management</b></span><span>Rep <b id="rep">1</b>/5</span></div>
+    <div class="stage" id="st" tabindex="0" style="min-height:340px">
+      <div class="sub" style="margin-top:0">Stop the clock at</div>
+      <div class="huge" id="tgt" style="color:var(--suede);font-size:clamp(46px,14vw,78px)">—</div>
+      <div class="cad mt" id="face" style="font-family:var(--mono);font-size:clamp(26px,8vw,40px);letter-spacing:.04em">0.00</div>
+      <div class="sub" id="sub">Get ready</div>
+      <div class="pips" id="pips">${'<span class="pip"></span>'.repeat(5)}</div>
+    </div>
+    <p class="small mt" style="text-align:center">The clock shows for a moment, then hides. Tap when you think it hits the number.</p>`);
+  const st=$('#st'), face=$('#face'), tgt=$('#tgt'), sub=$('#sub');
+  let pts=0;
+  for(let rep=0; rep<5 && live(t); rep++){
+    $('#rep').textContent=rep+1;
+    const target=TARGETS[rep] + (Math.random()*0.3-0.15);
+    tgt.textContent=target.toFixed(2);
+    face.textContent='0.00'; face.style.opacity='.35';
+    sub.textContent='Starting…';
+    await wait(1300);
+    if(!live(t)) break;
+    let done=false, start=performance.now(), resolveRep;
+    const repDone=new Promise(r=>resolveRep=r);
+    const mark=c=>{ const p=$('#pips'); if(p&&p.children[rep]) p.children[rep].className='pip '+c; };
+    const stop=()=>{
+      if(done) return; done=true;
+      const el=(performance.now()-start)/1000;
+      st.removeEventListener('pointerdown',stop); window.removeEventListener('keydown',key);
+      clearTimeout(hideT); clearTimeout(killT);
+      const err=Math.abs(el-target);
+      const p = err<=0.10 ? 50 : clamp(Math.round(50*(1-(err-0.10)/0.90)),0,50);
+      pts+=p;
+      face.style.opacity='1'; face.textContent=el.toFixed(2);
+      sub.textContent = p>=45?'On the money':p>=25?(el>target?'Late':'Early'):p>0?(el>target?'Well late':'Well early'):'Way off';
+      mark(p>0?'on':'miss');
+      setTimeout(resolveRep,1000);
+    };
+    const key=e=>{ if(e.code==='Space'||e.key===' '){ e.preventDefault(); stop(); } };
+    st.addEventListener('pointerdown',stop); window.addEventListener('keydown',key);
+    sub.textContent='Running';
+    face.style.opacity='1';
+    const paint=()=>{ if(done||!live(t)) return;
+      const el=(performance.now()-start)/1000;
+      if(face.style.opacity==='1') face.textContent=el.toFixed(2);
+      requestAnimationFrame(paint); };
+    start=performance.now(); requestAnimationFrame(paint);
+    const hideT=setTimeout(()=>{ if(!done){ face.style.opacity='0'; sub.textContent='Count it out'; } },700);
+    const killT=setTimeout(()=>{ if(!done){ done=true;
+      st.removeEventListener('pointerdown',stop); window.removeEventListener('keydown',key);
+      face.style.opacity='1'; face.textContent='—'; sub.textContent='Never stopped it'; mark('miss');
+      setTimeout(resolveRep,1000); } }, (target+2.2)*1000);
+    await repDone;
+  }
+  return {points: clamp(pts,0,250)};
+}
+
+/* ==========================================================================
    DRAFT BOARD
    ========================================================================== */
 function screenBoard(L, results){
@@ -1055,18 +1451,29 @@ function screenBoard(L, results){
 function route(){
   const h = location.hash || '';
   const mp = h.match(/^#p=([A-Za-z0-9\-_]+)/);
-  const mc = h.match(/^#c=([A-Za-z0-9\-_]+)/);
+  const mc = h.match(/^#c=([A-Za-z0-9\-_]+)(?:&r=([A-Z0-9]+))?/);
   if(mp){
     const p = unb64u(mp[1]);
-    if(p && p.m && typeof p.k === 'string' && p.k.length >= 16 && Number.isInteger(p.i)) return screenPlayerIntro(p);
+    if(p && p.m && typeof p.k === 'string' && p.k.length >= 16 && Number.isInteger(p.i)){
+      if(!Array.isArray(p.g)) p.g = DEFAULT_G;   // links made before stations were selectable
+      return screenPlayerIntro(p);
+    }
     return render('<div class="eyebrow">Broken link</div><h2 class="mt">This link is damaged</h2><p class="lede mt">Ask your commissioner to resend it. Links break when a text message wraps or shortens them — copy and paste it whole rather than tapping a preview.</p>');
   }
   if(mc){
     const p = unb64u(mc[1]);
     if(p && p.m && p.k){
-      const L = {name:p.n, code:p.c, managers:p.m, master:p.k};
+      const L = {name:p.n, code:p.c, managers:p.m, master:p.k, games:p.g};
       const cached = lsGet('gg.commish.'+L.code);
-      return screenCommish(L, (cached && cached.codes) || {});
+      const codes = Object.assign({}, (cached && cached.codes) || {});
+      if(mc[2]){                       // codes carried in the URL win
+        const raw = mc[2];
+        for(let i=0; i+16<=raw.length; i+=16){
+          const c = raw.slice(i,i+16), s = slotOf(c);
+          if(s !== null && s < L.managers.length) codes[s] = c;
+        }
+      }
+      return screenCommish(L, codes);
     }
     return render('<div class="eyebrow">Broken link</div><h2 class="mt">This commissioner link is damaged</h2><p class="lede mt">Use your downloaded backup, or the copy saved on the browser where you set the league up.</p>');
   }
