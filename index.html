@@ -172,13 +172,22 @@ tr:last-child td{border-bottom:0}
 .chk .n{font-family:var(--display);font-weight:600;font-size:17px;text-transform:uppercase;line-height:1.1}
 .chk .m{font-size:12.5px;color:var(--silver);margin-top:2px;word-break:break-all}
 
-.pickrow{display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start;padding:9px 0;
-  border-bottom:1px dashed var(--hair);cursor:pointer;margin:0}
-.pickrow:last-child{border-bottom:0}
-.pickrow input{width:17px;height:17px;accent-color:var(--suede);margin-top:3px;padding:0}
-.pickrow .t{font-family:var(--display);font-weight:600;font-size:18px;text-transform:uppercase;line-height:1.05;display:block}
-.pickrow .d{font-size:12.5px;color:var(--fog);display:block;margin-top:2px}
-.pickrow.on .t{color:var(--suede)}
+.pickhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;gap:10px}
+.pickhead label{margin:0}
+.pickcount{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--fog);white-space:nowrap}
+.pickcount.ok{color:#7fae7f}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{position:relative;text-align:left;padding:11px 26px 11px 12px;border:1px solid var(--hair);border-radius:2px;
+  background:rgba(0,0,0,.18);min-height:68px;transition:background .1s,border-color .1s;cursor:pointer}
+.tile:hover{background:rgba(246,238,226,.06)}
+.tile .t{display:block;font-family:var(--display);font-weight:700;font-size:16px;line-height:1.03;
+  text-transform:uppercase;letter-spacing:.01em;color:var(--chalk)}
+.tile .s{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--fog);margin-top:5px}
+.tile.on{background:var(--suede);border-color:var(--suede)}
+.tile.on .t{color:#1d1710}
+.tile.on .s{color:rgba(29,23,16,.72)}
+.tile.on::after{content:'';position:absolute;top:9px;right:9px;width:7px;height:7px;border-radius:50%;background:#1d1710}
 
 .pickcard{display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:14px;border:1px solid var(--hair);
   border-radius:2px;padding:14px 16px;margin-bottom:9px;background:rgba(246,238,226,.035);opacity:0;transform:translateY(14px)}
@@ -245,14 +254,14 @@ const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 chars, no O/0/I/1
    scores would mean nothing otherwise. Order here is permanent: the indices
    are what get stored, so new stations append and existing ones never move. */
 const POOL = [
-  {t:'Snap Count',        d:'Read the cadence. Move on the snap, not before.',        fn:()=>gameSnapCount()},
-  {t:'Playbook Recall',   d:'Watch the route sequence. Play it back in order.',       fn:()=>gameRecall()},
-  {t:'Precision Passing', d:'Lead the receiver. Release early or you throw behind him.', fn:()=>gamePassing()},
-  {t:'Two-Minute Drill',  d:'Score the stat line. Wrong answers burn clock.',         fn:()=>gameDrill()},
-  {t:'Route Tree',        d:'Find the called route on a board that keeps reshuffling.', fn:()=>gameRouteTree()},
-  {t:'Pocket Presence',   d:'Slide away from the rush. Stay upright as long as you can.', fn:()=>gamePocket()},
-  {t:'Audible',           d:'Ignore what the word says. Answer where it sits.',       fn:()=>gameAudible()},
-  {t:'Clock Management',  d:'Stop the clock on the number. It hides while it runs.',  fn:()=>gameClock()}
+  {t:'Snap Count',        s:'Reaction',      d:'Read the cadence. Move on the snap, not before.',        fn:()=>gameSnapCount()},
+  {t:'Playbook Recall',   s:'Memory',        d:'Watch the route sequence. Play it back in order.',       fn:()=>gameRecall()},
+  {t:'Precision Passing', s:'Anticipation',  d:'Lead the receiver. Release early or you throw behind him.', fn:()=>gamePassing()},
+  {t:'Two-Minute Drill',  s:'Scoring math',  d:'Score the stat line. Wrong answers burn clock.',         fn:()=>gameDrill()},
+  {t:'Route Tree',        s:'Visual search', d:'Find the called route on a board that keeps reshuffling.', fn:()=>gameRouteTree()},
+  {t:'Pocket Presence',   s:'Evasion',       d:'Slide away from the rush. Stay upright as long as you can.', fn:()=>gamePocket()},
+  {t:'Audible',           s:'Inhibition',    d:'Ignore what the word says. Answer where it sits.',       fn:()=>gameAudible()},
+  {t:'Clock Management',  s:'Timing',        d:'Stop the clock on the number. It hides while it runs.',  fn:()=>gameClock()}
 ];
 const DEFAULT_G = [0,1,2,3];
 const stations = g => (Array.isArray(g) && g.length===4 && g.every(i=>POOL[i]) ? g : DEFAULT_G).map(i=>POOL[i]);
@@ -470,31 +479,37 @@ function screenSetup(){
     <div id="err"></div>
     <div class="field"><label>League name</label><input id="lname" maxlength="42" placeholder="e.g. Sunday Money"></div>
     <div class="field"><label>Managers — one per line, in any order</label>
-      <textarea id="mgrs" rows="9" placeholder="Jesse&#10;Harman&#10;Ryan&#10;Steven"></textarea></div>
+      <textarea id="mgrs" rows="6" placeholder="Jesse&#10;Harman&#10;Ryan&#10;Steven"></textarea></div>
     <div class="rule"></div>
-    <div class="field"><label>Stations — pick exactly four</label>
-      <div id="pool">${POOL.map((g,i)=>`<label class="pickrow" data-row="${i}">
-        <input type="checkbox" data-g="${i}">
-        <span><span class="t">${g.t}</span><span class="d">${g.d}</span></span></label>`).join('')}</div>
-      <div class="row mt"><button class="btn ghost sm" id="shuf">Draw four at random</button>
-        <span class="small mono" id="cnt" style="align-self:center"></span></div>
-    </div>
-    <p class="small">Everyone in a league runs the same four. Change them next season and the gauntlet is new again.</p>
+    <div class="pickhead"><label>Stations — tap four</label><span class="pickcount" id="cnt">0 of 4</span></div>
+    <div class="tiles" id="pool">${POOL.map((g,i)=>`<button type="button" class="tile" data-g="${i}" title="${esc(g.d)}">
+      <span class="t">${g.t}</span><span class="s">${g.s}</span></button>`).join('')}</div>
+    <button class="btn ghost sm mt" id="shuf" style="width:100%">Draw four at random</button>
+    <p class="small mt">Everyone in a league runs the same four. Tap a fifth and your earliest pick drops out.</p>
     <button class="btn mt" id="go">Generate links</button>
     <button class="btn ghost mt" id="back">Back</button>
   `);
   $('#back').onclick = screenHome;
-  const boxes = $$('[data-g]');
-  const chosen = () => boxes.filter(b=>b.checked).map(b=>+b.dataset.g);
+  /* A Set keeps insertion order, so a fifth tap evicts the earliest pick
+     instead of being ignored — you can keep exploring without deselecting. */
+  let picked = new Set();
+  const tiles = $$('.tile');
+  const chosen = () => [...picked];
   const refresh = () => {
-    const n = chosen().length;
-    $('#cnt').textContent = n+' of 4 chosen';
-    $('#cnt').style.color = n===4 ? '#7fae7f' : 'var(--fog)';
-    boxes.forEach(b => b.closest('.pickrow').classList.toggle('on', b.checked));
+    tiles.forEach(el => el.classList.toggle('on', picked.has(+el.dataset.g)));
+    const n = picked.size, go = $('#go'), cnt = $('#cnt');
+    cnt.textContent = n+' of 4';
+    cnt.className = 'pickcount' + (n===4 ? ' ok' : '');
+    go.disabled = n !== 4;
+    go.textContent = n===4 ? 'Generate links' : 'Tap '+(4-n)+' more station'+(4-n===1?'':'s');
   };
-  const draw = () => { const r = shuffle([...POOL.keys()]).slice(0,4);
-    boxes.forEach(b => b.checked = r.includes(+b.dataset.g)); refresh(); };
-  boxes.forEach(b => b.onchange = refresh);
+  const draw = () => { picked = new Set(shuffle([...POOL.keys()]).slice(0,4)); refresh(); };
+  tiles.forEach(el => el.onclick = () => {
+    const i = +el.dataset.g;
+    if(picked.has(i)) picked.delete(i);
+    else { if(picked.size >= 4) picked.delete(picked.values().next().value); picked.add(i); }
+    refresh();
+  });
   $('#shuf').onclick = draw;
   draw();
   $('#go').onclick = async () => {
